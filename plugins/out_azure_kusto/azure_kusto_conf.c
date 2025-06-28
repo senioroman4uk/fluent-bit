@@ -749,6 +749,19 @@ struct flb_azure_kusto *flb_azure_kusto_conf_create(struct flb_output_instance *
         return NULL;
     }
 
+    if (ctx->enable_traces == true) {
+        /* config: 'enable_traces' */
+        flb_plg_info(ctx->ins, "traces enabled");
+        if (ctx->trace_table_name == NULL) {
+            flb_plg_error(ctx->ins, "property 'trace_table_name' is not defined");
+            flb_azure_kusto_conf_destroy(ctx);
+            return NULL;
+        }
+    }
+    else {
+        flb_plg_info(ctx->ins, "traces disabled");
+    }
+
     if (ctx->managed_identity_client_id != NULL) {
         /* system assigned managed identity */
         if (strcasecmp(ctx->managed_identity_client_id, "system") == 0) {

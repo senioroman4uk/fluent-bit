@@ -898,7 +898,9 @@ static void cb_splunk_flush(struct flb_event_chunk *event_chunk,
                             event_chunk->size,
                             (char *) event_chunk->tag,
                             flb_sds_len(event_chunk->tag),
-                            &buf_data, &buf_size, ctx);
+                            &buf_data,
+                            &buf_size,
+                            ctx);
     }
 
     if (ret == -1) {

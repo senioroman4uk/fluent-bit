@@ -88,6 +88,9 @@ struct flb_azure_kusto {
     flb_sds_t database_name;
     flb_sds_t table_name;
     flb_sds_t ingestion_mapping_reference;
+    flb_sds_t trace_table_name;
+    bool enable_traces;
+    flb_sds_t trace_ingestion_mapping_reference;
 
     int ingestion_endpoint_connect_timeout;
     int io_timeout;

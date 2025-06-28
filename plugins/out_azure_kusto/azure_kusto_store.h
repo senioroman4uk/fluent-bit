@@ -31,13 +31,14 @@ struct azure_kusto_file {
     size_t size;                     /* file size */
     time_t create_time;              /* creation time */
     flb_sds_t file_path;             /* file path */
+    flb_sds_t table_name;             /* table name */
     int lock_fd;                     /* File descriptor for locking */
     struct flb_fstore_file *fsf;     /* reference to parent flb_fstore_file */
 };
 
 int azure_kusto_store_buffer_put(struct flb_azure_kusto *ctx, struct azure_kusto_file *azure_kusto_file,
                                  flb_sds_t tag, size_t tag_len,
-                                 flb_sds_t data, size_t bytes);
+                                 flb_sds_t data, size_t bytes, flb_sds_t table_name);
 
 int azure_kusto_store_init(struct flb_azure_kusto *ctx);
 int azure_kusto_store_exit(struct flb_azure_kusto *ctx);
