@@ -197,6 +197,21 @@ char *ctr_span_kind_string(struct ctrace_span *span)
     };
 }
 
+/* returns a read-only string version of the Span status code */
+char *ctr_span_status_string(struct ctrace_span *span)
+{
+    switch (span->status.code) {
+        case CTRACE_SPAN_STATUS_CODE_UNSET:
+            return "STATUS_CODE_UNSET";
+        case CTRACE_SPAN_STATUS_CODE_OK:
+            return "STATUS_CODE_OK";
+        case CTRACE_SPAN_STATUS_CODE_ERROR:
+            return "STATUS_CODE_ERROR";
+        default:
+            return "";
+    }
+}
+
 /*
  * Span attributes
  * ---------------

@@ -38,6 +38,283 @@
 #include "azure_msiauth.h"
 #include "azure_kusto_store.h"
 
+/* Event structure for trace events */
+struct AdxEvent {
+    flb_sds_t name;            /* Name of the event */
+    flb_sds_t timestamp;       /* Timestamp formatted as RFC3339Nano */
+    flb_sds_t attributes;      /* JSON string of event attributes */
+};
+
+/* Link structure for trace links */
+struct AdxLink {
+    flb_sds_t trace_id;        /* TraceID of the linked span */
+    flb_sds_t span_id;         /* SpanID of the linked span */
+    flb_sds_t attributes;      /* JSON string of link attributes */
+};
+
+/* Main trace structure for Azure Data Explorer */
+struct AdxTrace {
+    cfl_sds_t trace_id;           /* TraceID associated to the Trace */
+    cfl_sds_t span_id;            /* SpanID associated to the Trace */
+    cfl_sds_t parent_id;          /* ParentID associated to the Trace */
+    cfl_sds_t span_name;          /* The SpanName of the Trace */
+    cfl_sds_t span_status;        /* The SpanStatus Code associated to the Trace */
+    cfl_sds_t span_status_message; /* The SpanStatusMessage associated to the Trace */
+    cfl_sds_t span_kind;          /* The SpanKind of the Trace */
+    uint64_t start_time;         /* The start time formatted as RFC3339Nano */
+    uint64_t end_time;           /* The end time formatted as RFC3339Nano */
+    cfl_sds_t resource_attributes; /* JSON string of resource attributes */
+    cfl_sds_t trace_attributes;    /* JSON string of trace attributes */
+    struct AdxEvent **events;      /* Array of events in a span */
+    int event_count;               /* Count of events in the events array */
+    struct AdxLink **links;        /* Array of links in a span */
+    int link_count;                /* Count of links in the links array */
+};
+
+static void adx_trace_to_msgpack(const struct AdxTrace *trace, msgpack_packer *mp_pck)
+{
+    /* Calculate map size based on fields */
+    int map_size = 11; /* Adjust if you add/remove fields */
+
+    msgpack_pack_map(mp_pck, map_size);
+
+    // 1
+    msgpack_pack_str(mp_pck, 8);
+    msgpack_pack_str_body(mp_pck, "trace_id", 8);
+    msgpack_pack_str(mp_pck, cfl_sds_len(trace->trace_id));
+    msgpack_pack_str_body(mp_pck, trace->trace_id, cfl_sds_len(trace->trace_id));
+
+    // 2
+    msgpack_pack_str(mp_pck, 7);
+    msgpack_pack_str_body(mp_pck, "span_id", 7);
+    msgpack_pack_str(mp_pck, cfl_sds_len(trace->span_id));
+    msgpack_pack_str_body(mp_pck, trace->span_id, cfl_sds_len(trace->span_id));
+
+    // 3
+    msgpack_pack_str(mp_pck, 9);
+    msgpack_pack_str_body(mp_pck, "parent_id", 9);
+    if (trace->parent_id) {
+        msgpack_pack_str(mp_pck, cfl_sds_len(trace->parent_id));
+        msgpack_pack_str_body(mp_pck, trace->parent_id, cfl_sds_len(trace->parent_id));
+    } else {
+        msgpack_pack_nil(mp_pck);
+    }
+
+    // 4
+    msgpack_pack_str(mp_pck, 9);
+    msgpack_pack_str_body(mp_pck, "span_name", 9);
+    msgpack_pack_str(mp_pck, cfl_sds_len(trace->span_name));
+    msgpack_pack_str_body(mp_pck, trace->span_name, cfl_sds_len(trace->span_name));
+
+    // 5
+    msgpack_pack_str(mp_pck, 11);
+    msgpack_pack_str_body(mp_pck, "span_status", 11);
+    msgpack_pack_str(mp_pck, cfl_sds_len(trace->span_status));
+    msgpack_pack_str_body(mp_pck, trace->span_status, cfl_sds_len(trace->span_status));
+
+    // 6
+    msgpack_pack_str(mp_pck, 19);
+    msgpack_pack_str_body(mp_pck, "span_status_message", 19);
+    if (trace->span_status_message) {
+        msgpack_pack_str(mp_pck, cfl_sds_len(trace->span_status_message));
+        msgpack_pack_str_body(mp_pck, trace->span_status_message, cfl_sds_len(trace->span_status_message));
+    } else {
+        msgpack_pack_nil(mp_pck);
+    }
+
+    // 7
+    msgpack_pack_str(mp_pck, 9);
+    msgpack_pack_str_body(mp_pck, "span_kind", 9);
+    msgpack_pack_str(mp_pck, cfl_sds_len(trace->span_kind));
+    msgpack_pack_str_body(mp_pck, trace->span_kind, cfl_sds_len(trace->span_kind));
+
+    // 8
+    msgpack_pack_str(mp_pck, 10);
+    msgpack_pack_str_body(mp_pck, "start_time", 10);
+    msgpack_pack_uint64(mp_pck, trace->start_time);
+
+    // 9
+    msgpack_pack_str(mp_pck, 8);
+    msgpack_pack_str_body(mp_pck, "end_time", 8);
+    msgpack_pack_uint64(mp_pck, trace->end_time);
+
+    // 10
+    msgpack_pack_str(mp_pck, 19);
+    msgpack_pack_str_body(mp_pck, "resource_attributes", 19);
+    if (trace->resource_attributes) {
+        msgpack_pack_str(mp_pck, cfl_sds_len(trace->resource_attributes));
+        msgpack_pack_str_body(mp_pck, trace->resource_attributes, flb_sds_len(trace->resource_attributes));
+    } else {
+        msgpack_pack_nil(mp_pck);
+    }
+
+    // 11
+    msgpack_pack_str(mp_pck, 16);
+    msgpack_pack_str_body(mp_pck, "trace_attributes", 16);
+    if (trace->trace_attributes) {
+        msgpack_pack_str(mp_pck, flb_sds_len(trace->trace_attributes));
+        msgpack_pack_str_body(mp_pck, trace->trace_attributes, flb_sds_len(trace->trace_attributes));
+    } else {
+        msgpack_pack_nil(mp_pck);
+    }
+
+    /* Add events and links similarly if needed */
+}
+
+static void adx_trace_destroy(struct AdxTrace *trace)
+{
+    if (!trace) {
+        return;
+    }
+
+    cfl_sds_destroy(trace->trace_id);
+    cfl_sds_destroy(trace->span_id);
+    cfl_sds_destroy(trace->parent_id);
+    cfl_sds_destroy(trace->span_name);
+    cfl_sds_destroy(trace->span_status_message);
+    cfl_sds_destroy(trace->span_kind);
+    cfl_sds_destroy(trace->span_status);
+
+    if (trace->resource_attributes) {
+        cfl_sds_destroy(trace->resource_attributes);
+    }
+
+    if (trace->trace_attributes) {
+        cfl_sds_destroy(trace->trace_attributes);
+    }
+
+    for (int i = 0; i < trace->event_count; i++) {
+        cfl_sds_destroy(trace->events[i]->name);
+        cfl_sds_destroy(trace->events[i]->timestamp);
+        cfl_sds_destroy(trace->events[i]->attributes);
+        flb_free(trace->events[i]);
+    }
+
+    if (trace->events)
+    {
+        flb_free(trace->events);
+    }
+
+    for (int i = 0; i < trace->link_count; i++) {
+        flb_sds_destroy(trace->links[i]->trace_id);
+        flb_sds_destroy(trace->links[i]->span_id);
+        flb_sds_destroy(trace->links[i]->attributes);
+        flb_free(trace->links[i]);
+    }
+
+    if (trace->links)
+    {
+        flb_free(trace->links);
+    }
+
+    flb_free(trace);
+}
+
+/* Map trace data to AdxTrace structure */
+static struct AdxTrace *mapToAdxTrace(struct flb_azure_kusto *ctx,
+                              struct ctrace_resource_span *resource_span,
+                              struct ctrace_scope_span *scope_span,
+                              struct ctrace_span *span)
+{
+    /* Set basic span information */
+    struct AdxTrace* trace = flb_calloc(1, sizeof(struct AdxTrace));
+    trace->trace_id = ctr_id_to_lower_base16(span->trace_id);
+    trace->span_id = ctr_id_to_lower_base16(span->span_id);
+    trace->parent_id = span->parent_span_id ? ctr_id_to_lower_base16(span->parent_span_id) : NULL;
+    trace->span_name = cfl_sds_create(span->name);
+    trace->span_status = cfl_sds_create(ctr_span_status_string(span));
+    trace->span_kind = cfl_sds_create(ctr_span_kind_string(span));
+    trace->span_status_message = span->status.message ? cfl_sds_create(span->status.message) : NULL;
+    trace->start_time = span->start_time_unix_nano;
+    trace->end_time = span->end_time_unix_nano;
+
+    /* Process resource and span attributes */
+    // if not empty add to trace
+
+    /*scope_span->instrumentation_scope->version;
+    scope_span->instrumentation_scope->name;*/
+
+    //trace->resource_attributes = attributes_to_json(resource_span->resource->attr->kv);
+    //trace->trace_attributes = attributes_to_json(span->attributes);*/
+
+    /* Process events and links */
+    /*trace->events = process_events(span, &trace->event_count);
+    trace->links = process_links(span, &trace->link_count);*/
+
+    return trace;
+}
+
+static int azure_kusto_ctrace_format(struct flb_azure_kusto *ctx, struct flb_event_chunk *event_chunk, flb_sds_t* out_buf)
+{
+    struct cfl_list *resource_span_head;
+    msgpack_sbuffer mp_sbuf;
+    msgpack_packer mp_pck;
+    size_t offset = 0;
+    struct ctrace *trace;
+
+    msgpack_sbuffer_init(&mp_sbuf);
+    msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
+
+    while (ctr_decode_msgpack_create(&trace,
+                                    (char *) event_chunk->data,
+                                    event_chunk->size, &offset) == 0) {
+        cfl_sds_t raw_trace_json = ctr_encode_text_create(trace);
+        flb_plg_debug(ctx->ins, "trace %s", raw_trace_json);
+        cfl_sds_destroy(raw_trace_json);
+
+        /* iterate resource_spans */
+        cfl_list_foreach(resource_span_head, &trace->resource_spans) {
+            struct ctrace_resource_span* resource_span = cfl_list_entry(resource_span_head, struct ctrace_resource_span, _head);
+            struct cfl_list *scope_span_head;
+
+            /* scope spans */
+            cfl_list_foreach(scope_span_head, &resource_span->scope_spans) {
+                struct ctrace_scope_span* scope_span = cfl_list_entry(scope_span_head, struct ctrace_scope_span, _head);
+                struct cfl_list *span_head;
+
+                /* spans */
+                cfl_list_foreach(span_head, &scope_span->spans) {
+                    msgpack_sbuffer_clear(&mp_sbuf);
+                    struct ctrace_span* span = cfl_list_entry(span_head, struct ctrace_span, _head);
+
+                    struct AdxTrace* adxTrace = mapToAdxTrace(ctx, resource_span, scope_span, span);
+                    adx_trace_to_msgpack(adxTrace, &mp_pck);
+                    flb_sds_t encoded_trace_json = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
+
+                    if (!encoded_trace_json) {
+                        flb_plg_error(ctx->ins, "error converting trace msgpack to JSON");
+                        msgpack_sbuffer_destroy(&mp_sbuf);
+                        return -1;
+                    }
+
+                    /* Concatenate the JSON record to the output buffer */
+                    int concat_result = flb_sds_cat_safe(out_buf, encoded_trace_json, flb_sds_len(encoded_trace_json));
+                    if (concat_result != 0) {
+                        goto error;
+                    }
+
+                    concat_result = flb_sds_cat_safe(out_buf, "\n", flb_sds_len(encoded_trace_json));
+                    if (concat_result != 0){
+                        goto error;
+                    }
+
+                    flb_sds_destroy(encoded_trace_json);
+                    adx_trace_destroy(adxTrace);
+                }
+            }
+        }
+        ctr_destroy(trace);
+    }
+
+    msgpack_sbuffer_destroy(&mp_sbuf);
+    return 0;
+
+    error:
+    flb_plg_error(ctx->ins, "error concatenating trace JSON to output buffer");
+    msgpack_sbuffer_destroy(&mp_sbuf);
+    return -3;
+}
+
 static int azure_kusto_get_msi_token(struct flb_azure_kusto *ctx)
 {
     char *token;
@@ -408,6 +685,10 @@ static int ingest_all_chunks(struct flb_azure_kusto *ctx, struct flb_config *con
         mk_list_foreach_safe(f_head, tmp, &fs_stream->files) {
             fsf = mk_list_entry(f_head, struct flb_fstore_file, _head);
             chunk = fsf->data;
+            if (chunk == NULL)
+            {
+                continue;
+            }
 
             /* Locked chunks are being processed, skip */
             if (chunk->locked == FLB_TRUE) {
@@ -469,7 +750,7 @@ static int ingest_all_chunks(struct flb_azure_kusto *ctx, struct flb_config *con
             }
 
             /* Call azure_kusto_queued_ingestion to ingest the payload */
-            ret = azure_kusto_queued_ingestion(ctx, tag_sds, flb_sds_len(tag_sds), final_payload, final_payload_size, chunk);
+            ret = azure_kusto_queued_ingestion(ctx, tag_sds, flb_sds_len(tag_sds), final_payload, final_payload_size, chunk->table_name, chunk);
             if (ret != 0) {
                 flb_plg_error(ctx->ins, "ingest_all_old_buffer_files :: Failed to ingest data to Azure Kusto");
                 if (chunk){
@@ -654,7 +935,7 @@ static void cb_azure_kusto_ingest(struct flb_config *config, void *data)
             flb_plg_debug(ctx->ins, "scheduler_kusto_ingest ::: before starting kusto queued ingestion %s", file->fsf->name);
 
             /* Perform the queued ingestion */
-            ret = azure_kusto_queued_ingestion(ctx, tag_sds, flb_sds_len(tag_sds), final_payload, final_payload_size, NULL);
+            ret = azure_kusto_queued_ingestion(ctx, tag_sds, flb_sds_len(tag_sds), final_payload, final_payload_size, file->table_name, NULL);
             if (ret != 0) {
                 flb_plg_error(ctx->ins, "scheduler_kusto_ingest: Failed to ingest data to kusto");
 
@@ -734,6 +1015,7 @@ static void cb_azure_kusto_ingest(struct flb_config *config, void *data)
  * - upload_file: A pointer to an `azure_kusto_file` structure that contains information about the file to be uploaded.
  * - tag: A constant character pointer representing the tag associated with the data.
  * - tag_len: An integer representing the length of the tag.
+ * - table_name: Name of the kusto table.
  *
  * Returns:
  * - 0 on successful ingestion.
@@ -746,9 +1028,12 @@ static void cb_azure_kusto_ingest(struct flb_config *config, void *data)
  * 4. Calls the `azure_kusto_queued_ingestion` function to send the payload to Azure Kusto.
  * 5. Cleans up allocated resources, including destroying the payload and tag strings, and freeing the compressed payload if applicable.
  */
-static int ingest_to_kusto(void *out_context, flb_sds_t new_data,
-                               struct azure_kusto_file *upload_file,
-                               const char *tag, int tag_len)
+static int ingest_to_kusto(
+    void *out_context, flb_sds_t new_data,
+    struct azure_kusto_file *upload_file,
+    const char *tag,
+    int tag_len,
+    flb_sds_t table_name)
 {
     int ret;
     char *buffer = NULL;
@@ -798,7 +1083,7 @@ static int ingest_to_kusto(void *out_context, flb_sds_t new_data,
     }
 
     /* Call azure_kusto_queued_ingestion to ingest the payload */
-    ret = azure_kusto_queued_ingestion(ctx, tag_sds, tag_len, final_payload, final_payload_size, upload_file);
+    ret = azure_kusto_queued_ingestion(ctx, tag_sds, tag_len, final_payload, final_payload_size, table_name, upload_file);
     if (ret != 0) {
         flb_plg_error(ctx->ins, "Failed to ingest data to Azure Kusto");
         flb_sds_destroy(tag_sds);
@@ -1089,17 +1374,28 @@ static int azure_kusto_format(struct flb_azure_kusto *ctx, const char *tag, int 
     return 0;
 }
 
-static int buffer_chunk(void *out_context, struct azure_kusto_file *upload_file,
-                        flb_sds_t chunk, int chunk_size,
-                        flb_sds_t tag, size_t tag_len)
+static int buffer_chunk(
+    void *out_context,
+    struct azure_kusto_file *upload_file,
+    flb_sds_t chunk,
+    int chunk_size,
+    flb_sds_t tag,
+    size_t tag_len,
+    flb_sds_t table_name)
 {
     int ret;
     struct flb_azure_kusto *ctx = out_context;
 
     flb_plg_trace(ctx->ins, "Buffering chunk %d", chunk_size);
 
-    ret = azure_kusto_store_buffer_put(ctx, upload_file, tag,
-                                       tag_len, chunk, chunk_size);
+    ret = azure_kusto_store_buffer_put(
+        ctx,
+        upload_file,
+        tag,
+        tag_len,
+        chunk,
+        chunk_size,
+        table_name);
     if (ret < 0) {
         flb_plg_error(ctx->ins, "Could not buffer chunk. ");
         return -1;
@@ -1181,6 +1477,38 @@ static void flush_init(void *out_context, struct flb_config *config)
     }
 }
 
+static int process_traces(struct flb_event_chunk *event_chunk,
+                          void *out_context,
+                          void **out_data,
+                          size_t *out_size)
+{
+    int result = 0;
+    flb_sds_t buf = NULL;
+    struct flb_azure_kusto *ctx = out_context;
+
+    buf = flb_sds_create_size(event_chunk->size);
+    if (!buf) {
+        flb_plg_error(ctx->ins, "could not allocate outgoing buffer");
+        return -1;
+    }
+
+    int totalTraces = flb_mp_count(event_chunk->data, event_chunk->size);
+    if (totalTraces <= 0) {
+        flb_plg_error(ctx->ins, "error counting msgpack entries in traces");
+        flb_sds_destroy(buf);
+        return -2;
+    }
+
+    flb_plg_debug(ctx->ins, "ctraces msgpack size: %lu with %d traces",
+                  event_chunk->size,
+                  totalTraces);
+
+    result = azure_kusto_ctrace_format(ctx, event_chunk, &buf);
+    *out_data = buf;
+    *out_size = flb_sds_len(buf);
+    return result;
+}
+
 /**
  * This function handles the flushing of event data to Azure Kusto.
  * It manages both buffered and non-buffered modes, handles JSON formatting,
@@ -1194,7 +1522,8 @@ static void flush_init(void *out_context, struct flb_config *config)
  */
 static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
                                  struct flb_output_flush *out_flush,
-                                 struct flb_input_instance *i_ins, void *out_context,
+                                 struct flb_input_instance *i_ins,
+                                 void *out_context,
                                  struct flb_config *config)
 {
     int ret;
@@ -1215,7 +1544,12 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
     void *final_payload = NULL;
     size_t final_payload_size = 0;
 
-    flb_plg_debug(ctx->ins, "flushing bytes for event tag %s and size %zu", event_chunk->tag ,event_chunk->size);
+    flb_plg_debug(ctx->ins, "flushing bytes for event tag %s of type %i and size %zu", event_chunk->tag, event_chunk->type, event_chunk->size);
+
+    if (event_chunk->type == FLB_EVENT_TYPE_TRACES && ctx->enable_traces == FLB_FALSE) {
+        flb_plg_debug(ctx->ins, "traces are disabled, skipping flush for event tag %s of type %i and size %zu", event_chunk->tag, event_chunk->type, event_chunk->size);
+        FLB_OUTPUT_RETURN(FLB_OK);
+    }
 
     /* Get the length of the event tag */
     tag_len = flb_sds_len(event_chunk->tag);
@@ -1232,9 +1566,25 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
         /* Initialize the flush process */
         flush_init(ctx,config);
 
+        flb_sds_t table_name;
         /* Reformat msgpack to JSON payload */
-        ret = azure_kusto_format(ctx, tag_name, tag_name_len, event_chunk->data,
-                                 event_chunk->size, (void **)&json, &json_size);
+        if (event_chunk->type == FLB_EVENT_TYPE_TRACES) {
+            /* Process traces */
+            table_name = ctx->trace_table_name;
+            ret = process_traces(event_chunk, ctx, (void **)&json, &json_size);
+        }
+        else if (event_chunk->type == FLB_EVENT_TYPE_LOGS) {
+            /* Process logs */
+            table_name = ctx->table_name;
+
+            ret = azure_kusto_format(ctx, tag_name, tag_name_len, event_chunk->data,
+                                event_chunk->size, (void **)&json, &json_size);
+        }
+        else {
+            flb_plg_error(ctx->ins, "Unsupported event type %d for tag %s", event_chunk->type, event_chunk->tag);
+            FLB_OUTPUT_RETURN(FLB_ERROR);
+        }
+
         if (ret != 0) {
             flb_plg_error(ctx->ins, "cannot reformat data into json");
             ret = FLB_RETRY;
@@ -1288,7 +1638,8 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
             /* Ingest data to kusto */
             ret = ingest_to_kusto(ctx, json, upload_file,
                                       tag_name,
-                                      tag_name_len);
+                                      tag_name_len,
+                                      table_name);
 
             if (ret == 0){
                 if (ctx->buffering_enabled == FLB_TRUE && ctx->buffer_file_delete_early == FLB_TRUE){
@@ -1327,7 +1678,7 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
 
         /* Buffer the current chunk in the filesystem */
         ret = buffer_chunk(ctx, upload_file, json, json_size,
-                           tag_name, tag_name_len);
+                           tag_name, tag_name_len, table_name);
 
         if (ret == 0) {
             flb_plg_debug(ctx->ins, "buffered chunk %s", event_chunk->tag);
@@ -1344,8 +1695,25 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
         /* Buffering mode is disabled, proceed with regular flush */
 
         /* Reformat msgpack data to JSON payload */
-        ret = azure_kusto_format(ctx, event_chunk->tag, tag_len, event_chunk->data,
-                                 event_chunk->size, (void **)&json, &json_size);
+        flb_sds_t table_name;
+        /* Reformat msgpack to JSON payload */
+        if (event_chunk->type == FLB_EVENT_TYPE_TRACES) {
+            /* Process traces */
+            table_name = ctx->trace_table_name;
+            ret = process_traces(event_chunk, ctx, (void **)&json, &json_size);
+        }
+        else if (event_chunk->type == FLB_EVENT_TYPE_LOGS) {
+            /* Process logs */
+            table_name = ctx->table_name;
+
+            ret = azure_kusto_format(ctx, tag_name, tag_name_len, event_chunk->data,
+                                event_chunk->size, (void **)&json, &json_size);
+        }
+        else {
+            flb_plg_error(ctx->ins, "Unsupported event type %d for tag %s", event_chunk->type, event_chunk->tag);
+            FLB_OUTPUT_RETURN(FLB_ERROR);
+        }
+
         if (ret != 0) {
             flb_plg_error(ctx->ins, "cannot reformat data into json");
             ret = FLB_RETRY;
@@ -1384,7 +1752,7 @@ static void cb_azure_kusto_flush(struct flb_event_chunk *event_chunk,
         }
 
         /* Perform queued ingestion to Kusto */
-        ret = azure_kusto_queued_ingestion(ctx, event_chunk->tag, tag_len, final_payload, final_payload_size, NULL);
+        ret = azure_kusto_queued_ingestion(ctx, event_chunk->tag, tag_len, final_payload, final_payload_size, table_name, NULL);
         flb_plg_trace(ctx->ins, "after kusto queued ingestion %d", ret);
         if (ret != 0) {
             flb_plg_error(ctx->ins, "cannot perform queued ingestion");
@@ -1511,10 +1879,18 @@ static struct flb_config_map config_map[] = {
     {FLB_CONFIG_MAP_STR, "database_name", (char *)NULL, 0, FLB_TRUE,
      offsetof(struct flb_azure_kusto, database_name), "Set the database name"},
     {FLB_CONFIG_MAP_STR, "table_name", (char *)NULL, 0, FLB_TRUE,
-     offsetof(struct flb_azure_kusto, table_name), "Set the table name"},
+     offsetof(struct flb_azure_kusto, table_name), "Set the log table name"},
     {FLB_CONFIG_MAP_STR, "ingestion_mapping_reference", (char *)NULL, 0, FLB_TRUE,
      offsetof(struct flb_azure_kusto, ingestion_mapping_reference),
      "Set the ingestion mapping reference"},
+    {FLB_CONFIG_MAP_STR, "trace_table_name", (char *)NULL, 0, FLB_TRUE,
+     offsetof(struct flb_azure_kusto, trace_table_name), "Set the trace table name"},
+    {FLB_CONFIG_MAP_STR, "trace_ingestion_mapping_reference", (char *)NULL, 0, FLB_TRUE,
+     offsetof(struct flb_azure_kusto, trace_ingestion_mapping_reference),
+     "Set the trace ingestion mapping reference"},
+    {FLB_CONFIG_MAP_BOOL, "enable_traces", false, 0, FLB_TRUE,
+     offsetof(struct flb_azure_kusto, enable_traces),
+        "Enable traces ingestion. If enabled, traces will be ingested to Azure Kusto."},
     {FLB_CONFIG_MAP_STR, "log_key", FLB_AZURE_KUSTO_DEFAULT_LOG_KEY, 0, FLB_TRUE,
      offsetof(struct flb_azure_kusto, log_key), "The key name of event payload"},
     {FLB_CONFIG_MAP_BOOL, "include_tag_key", "true", 0, FLB_TRUE,
@@ -1603,6 +1979,8 @@ struct flb_output_plugin out_azure_kusto_plugin = {
     .cb_flush = cb_azure_kusto_flush,
     .cb_exit = cb_azure_kusto_exit,
     .config_map = config_map,
+    .event_type   = FLB_OUTPUT_TRACES,
+
     /* Plugin flags */
     .flags = FLB_OUTPUT_NET | FLB_IO_TLS,
 };

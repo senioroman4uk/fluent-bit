@@ -217,7 +217,7 @@ struct azure_kusto_file *azure_kusto_store_file_get(struct flb_azure_kusto *ctx,
  */
 int azure_kusto_store_buffer_put(struct flb_azure_kusto *ctx, struct azure_kusto_file *azure_kusto_file,
                                  flb_sds_t tag, size_t tag_len,
-                                 flb_sds_t data, size_t bytes) {
+                                 flb_sds_t data, size_t bytes, flb_sds_t table_name) {
     int ret;
     flb_sds_t name;
     struct flb_fstore_file *fsf;
@@ -267,6 +267,7 @@ int azure_kusto_store_buffer_put(struct flb_azure_kusto *ctx, struct azure_kusto
         azure_kusto_file->fsf = fsf;
         azure_kusto_file->create_time = time(NULL);
         azure_kusto_file->size = 0; /* Initialize size to 0 */
+        azure_kusto_file->table_name = table_name;
 
         /* Use fstore opaque 'data' reference to keep our context */
         fsf->data = azure_kusto_file;

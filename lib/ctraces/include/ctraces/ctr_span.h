@@ -148,6 +148,9 @@ void ctr_span_end_ts(struct ctrace *ctx, struct ctrace_span *span, uint64_t ts);
 int ctr_span_kind_set(struct ctrace_span *span, int kind);
 char *ctr_span_kind_string(struct ctrace_span *span);
 
+/* status */
+char *ctr_span_status_string(struct ctrace_span *span);
+
 /* events */
 struct ctrace_span_event *ctr_span_event_add(struct ctrace_span *span, char *name);
 struct ctrace_span_event *ctr_span_event_add_ts(struct ctrace_span *span, char *name, uint64_t ts);

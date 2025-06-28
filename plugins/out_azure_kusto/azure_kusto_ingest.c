@@ -274,7 +274,7 @@ static flb_sds_t azure_kusto_create_blob(struct flb_azure_kusto *ctx, flb_sds_t 
 }
 
 static flb_sds_t create_ingestion_message(struct flb_azure_kusto *ctx, flb_sds_t blob_uri,
-                                          size_t payload_size)
+                                          size_t payload_size, flb_sds_t table_name)
 {
     flb_sds_t message = NULL;
     int ret = 0;
@@ -297,7 +297,7 @@ static flb_sds_t create_ingestion_message(struct flb_azure_kusto *ctx, flb_sds_t
         flb_plg_debug(ctx->ins,"blob uri :: %s",blob_uri);
         flb_plg_debug(ctx->ins,"payload size :: %lu",payload_size);
         flb_plg_debug(ctx->ins,"database_name :: %s",ctx->database_name);
-        flb_plg_debug(ctx->ins,"table name :: %s",ctx->table_name);
+        flb_plg_debug(ctx->ins,"table name :: %s",table_name);
 
         if (message) {
             message_len =
@@ -311,7 +311,7 @@ static flb_sds_t create_ingestion_message(struct flb_azure_kusto *ctx, flb_sds_t
                                      "\"authorizationContext\": \"%s\", "
                                      "\"jsonMappingReference\": \"%s\" }}%c",
                                      uuid, blob_uri, payload_size, ctx->database_name,
-                                     ctx->table_name, FLB_VERSION_STR, "Kusto.Fluent-Bit",
+                                     table_name, FLB_VERSION_STR, "Kusto.Fluent-Bit",
                                      ctx->resources->identity_token,
                                      ctx->ingestion_mapping_reference == NULL ? "" : ctx->ingestion_mapping_reference, 0);
 
@@ -403,8 +403,11 @@ static flb_sds_t azure_kusto_create_queue_uri(struct flb_azure_kusto *ctx,
     return uri;
 }
 
-static int azure_kusto_enqueue_ingestion(struct flb_azure_kusto *ctx, flb_sds_t blob_uri,
-                                         size_t payload_size)
+static int azure_kusto_enqueue_ingestion(
+    struct flb_azure_kusto *ctx,
+    flb_sds_t blob_uri,
+    size_t payload_size,
+    flb_sds_t table_name)
 {
     int ret = -1;
     struct flb_upstream_node *u_node;
@@ -449,7 +452,7 @@ static int azure_kusto_enqueue_ingestion(struct flb_azure_kusto *ctx, flb_sds_t 
         }
 
         if (uri) {
-            payload = create_ingestion_message(ctx, blob_uri, payload_size);
+            payload = create_ingestion_message(ctx, blob_uri, payload_size, table_name);
 
             if (payload) {
                 c = flb_http_client(u_conn, FLB_HTTP_POST, uri, payload,
@@ -536,8 +539,11 @@ void generate_random_string(char *str, size_t length)
     str[length] = '\0';
 }
 
-static flb_sds_t azure_kusto_create_blob_id(struct flb_azure_kusto *ctx, flb_sds_t tag,
-                                            size_t tag_len)
+static flb_sds_t azure_kusto_create_blob_id(
+    struct flb_azure_kusto *ctx,
+    flb_sds_t tag,
+    size_t tag_len,
+    flb_sds_t table_name)
 {
     flb_sds_t blob_id = NULL;
     struct flb_time tm;
@@ -591,7 +597,7 @@ static flb_sds_t azure_kusto_create_blob_id(struct flb_azure_kusto *ctx, flb_sds
     blob_id = flb_sds_create_size(1024); /* Ensure the size is restricted to 1024 characters */
     if (blob_id) {
         flb_sds_snprintf(&blob_id, 1024, "flb__%s__%s__%s__%llu__%s__%s",
-                         ctx->database_name, ctx->table_name, b64tag, ms, timestamp, uuid);
+                         ctx->database_name, table_name, b64tag, ms, timestamp, uuid);
     }
     else {
         flb_plg_error(ctx->ins, "cannot create blob id buffer");
@@ -606,8 +612,14 @@ static flb_sds_t azure_kusto_create_blob_id(struct flb_azure_kusto *ctx, flb_sds
     return blob_id;
 }
 
-int azure_kusto_queued_ingestion(struct flb_azure_kusto *ctx, flb_sds_t tag,
-                                 size_t tag_len, flb_sds_t payload, size_t payload_size, struct azure_kusto_file *upload_file )
+int azure_kusto_queued_ingestion(
+    struct flb_azure_kusto *ctx,
+    flb_sds_t tag,
+    size_t tag_len,
+    flb_sds_t payload,
+    size_t payload_size,
+    flb_sds_t table_name,
+    struct azure_kusto_file *upload_file )
 {
     int ret = -1;
     flb_sds_t blob_id;
@@ -620,7 +632,7 @@ int azure_kusto_queued_ingestion(struct flb_azure_kusto *ctx, flb_sds_t tag,
     }
 
     /* flb__<db>__<table>__<b64tag>__<timestamp> */
-    blob_id = azure_kusto_create_blob_id(ctx, tag, tag_len);
+    blob_id = azure_kusto_create_blob_id(ctx, tag, tag_len, table_name);
 
 
     if (pthread_mutex_unlock(&ctx->blob_mutex)) {
@@ -638,7 +650,7 @@ int azure_kusto_queued_ingestion(struct flb_azure_kusto *ctx, flb_sds_t tag,
                     flb_plg_error(ctx->ins, "blob creation successful but error deleting buffer file %s", blob_id);
                 }
             }
-            ret = azure_kusto_enqueue_ingestion(ctx, blob_uri, payload_size);
+            ret = azure_kusto_enqueue_ingestion(ctx, blob_uri, payload_size, table_name);
 
             if (ret != 0) {
                 flb_plg_error(ctx->ins, "failed to enqueue ingestion blob to queue");
